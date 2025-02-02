@@ -5,19 +5,18 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdint.h>
-#include <libgen.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 
+#define CONFIG_FILE "./params.cfg"  // Le fichier de configuration est dans le même répertoire que l'exécutable
 #define SYS_HIDRAW_PATH "/sys/class/hidraw"
 #define BUFFER_SIZE 8
-#define CONFIG_FILE_NAME "params.cfg"
 
 // Identifiants du périphérique recherché
 #define DEVICE_HID_ID "0018:00000B05:00000220"
 #define DEVICE_HID_NAME "ASUS2020:00 0B05:0220"
-#define DEVICE_MODALIAS "hid:b0018g0001v00000220"
+#define DEVICE_MODALIAS "hid:b0018g0001v00000B05p00000220"
 
 typedef struct {
     char action[50];
@@ -27,20 +26,6 @@ typedef struct {
 
 KeyBinding bindings[10];
 int binding_count = 0;
-char config_file_path[512];  // Stockera le chemin complet du fichier de configuration
-
-void set_config_path() {
-    char exe_path[512];
-    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (len != -1) {
-        exe_path[len] = '\0';  // Ajoute un caractère de fin de chaîne
-        char *dir = dirname(exe_path);  // Récupère le dossier de l'exécutable
-        snprintf(config_file_path, sizeof(config_file_path), "%s/%s", dir, CONFIG_FILE_NAME);
-    } else {
-        perror("Impossible de récupérer le chemin de l'exécutable");
-        exit(EXIT_FAILURE);
-    }
-}
 
 int is_target_device(const char *hidraw) {
     char uevent_path[512];
@@ -93,12 +78,12 @@ KeySym get_keysym_from_string(const char *key) {
 }
 
 void load_config() {
-    FILE *file = fopen(config_file_path, "r");
+    FILE *file = fopen(CONFIG_FILE, "r");
     if (!file) {
         perror("Impossible d'ouvrir params.cfg");
         return;
     }
-    char line[128];
+   char line[128];
     while (fgets(line, sizeof(line), file)) {
         if (line[0] == '#' || strlen(line) < 3) continue;
         char action[50], key1[20], key2[20] = "";
@@ -107,6 +92,7 @@ void load_config() {
             bindings[binding_count].key2 = (strlen(key2) > 0) ? get_keysym_from_string(key2) : 0;
             strcpy(bindings[binding_count].action, action);
             binding_count++;
+            printf("Chargé: %s -> %s + %s\n", action, key1, key2); // Debug: affiche les actions
         }
     }
     fclose(file);
@@ -133,6 +119,7 @@ void execute_action(const char *action) {
             return;
         }
     }
+    // Gestion des actions non reconnues sans arrêter le programme
     printf("Action inconnue : %s\n", action);
 }
 
@@ -143,33 +130,66 @@ void read_hidraw_data(const char *device_path) {
         return;
     }
     uint8_t data[BUFFER_SIZE];
-    int detected_click = 0;
+    uint8_t last_data[BUFFER_SIZE] = {0}; // Pour stocker les données précédentes
 
     while (1) {
         ssize_t bytesRead = read(fd, data, BUFFER_SIZE);
+        if (bytesRead < 0) {
+            perror("Erreur de lecture du périphérique HID");
+            break;  // On sort de la boucle si une erreur se produit
+        }
+
         if (bytesRead > 0) {
-            if (memcmp(data, (uint8_t[]){0x01, 0x01, 0x01, 0x00}, 4) == 0) {
-                execute_action("ACTION_APPUYER_ROUE_DR");
-                detected_click = 1;
-            }
-            else if (memcmp(data, (uint8_t[]){0x01, 0x01, 0xff, 0xff}, 4) == 0) {
-                execute_action("ACTION_APPUYER_ROUE_GA");
-                detected_click = 1;
-            }
-            else if (memcmp(data, (uint8_t[]){0x01, 0x01, 0x00, 0x00}, 4) == 0) {
-                if (!detected_click) detected_click = 1;
-            }
-            else if (memcmp(data, (uint8_t[]){0x01, 0x00, 0x00, 0x00}, 4) == 0) {
-                if (detected_click) {
-                    execute_action("ACTION_APPUYER_ROUE");
-                    detected_click = 0;
-                }
-            }
-            else if (memcmp(data, (uint8_t[]){0x01, 0x00, 0x01, 0x00}, 4) == 0) {
+            if (memcmp(data, (uint8_t[]){0x01, 0x00, 0x01, 0x00}, 4) == 0) {
                 execute_action("ACTION_TOURNER_DROITE");
+                printf("ACTION_ROUE_DROITE\n");
             }
             else if (memcmp(data, (uint8_t[]){0x01, 0x00, 0xff, 0xff}, 4) == 0) {
                 execute_action("ACTION_TOURNER_GAUCHE");
+                printf("ACTION_ROUE_GAUCHE\n");
+            }
+
+            // Détection des clics
+            else if (memcmp(data, (uint8_t[]){0x01, 0x01, 0x00, 0x00}, 4) == 0) {
+                // Si on détecte {0x01, 0x01, 0x00, 0x00}, on attend pour voir ce qui suit
+                printf("Clic... En attente de l'action suivante...\n");
+                // On mémorise cet état
+                memcpy(last_data, data, sizeof(last_data));
+            }
+
+            else if (memcmp(data, (uint8_t[]){0x01, 0x00, 0x00, 0x00}, 4) == 0) {
+                // Si on détecte {0x01, 0x00, 0x00, 0x00} après {0x01, 0x01, 0x00, 0x00}, on prend en compte le relâchement
+                if (memcmp(last_data, (uint8_t[]){0x01, 0x01, 0x00, 0x00}, 4) == 0) {
+                    memset(last_data, 0, sizeof(last_data));
+                    printf("Relâchement après clic, prendre en compte.\n");
+                    // Traiter comme un relâchement
+                    printf("Relâchement du bouton.\n");
+                }
+            }
+
+            else if (memcmp(data, (uint8_t[]){0x01, 0x01, 0x01, 0x00}, 4) == 0) {
+                if (memcmp(last_data, (uint8_t[]){0x01, 0x01, 0x00, 0x00}, 4) == 0 ||
+                    memcmp(last_data, (uint8_t[]){0x01, 0x01, 0x01, 0x00}, 4) == 0 ||
+                    memcmp(last_data, (uint8_t[]){0x01, 0x01, 0xff, 0xff}, 4) == 0) {
+                    memcpy(last_data, data, sizeof(last_data));
+                    printf("Clic + tourne a droite.\n");
+                    execute_action("ACTION_APPUYER_ROUE_DR");
+                }
+            }
+            else if (memcmp(data, (uint8_t[]){0x01, 0x01, 0xff, 0xff}, 4) == 0) {
+                // Si on détecte {0x01, 0x01, 0xff, 0xff} après {0x01, 0x01, 0x00, 0x00}, on ignore le précédent
+                if (memcmp(last_data, (uint8_t[]){0x01, 0x01, 0x00, 0x00}, 4) == 0 ||
+                    memcmp(last_data, (uint8_t[]){0x01, 0x01, 0x01, 0x00}, 4) == 0 ||
+                    memcmp(last_data, (uint8_t[]){0x01, 0x01, 0xff, 0xff}, 4) == 0) {
+                    memcpy(last_data, data, sizeof(last_data));
+                    printf("Clic + tourne a gauche.\n");
+                    execute_action("ACTION_APPUYER_ROUE_GA");
+                }
+            }
+
+            else {
+                // Si aucune action n'est reconnue, on l'ignore et continue
+                printf("Action inconnue, aucune action effectuée.\n");
             }
         }
     }
@@ -177,7 +197,6 @@ void read_hidraw_data(const char *device_path) {
 }
 
 int main() {
-    set_config_path();
     load_config();
     char *device_path = find_hidraw_device();
     if (!device_path) {
