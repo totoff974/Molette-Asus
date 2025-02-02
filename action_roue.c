@@ -8,8 +8,9 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
+#include <libgen.h>
 
-#define CONFIG_FILE "./params.cfg"  // Le fichier de configuration est dans le même répertoire que l'exécutable
+#define CONFIG_FILE_NAME "params.cfg"
 #define SYS_HIDRAW_PATH "/sys/class/hidraw"
 #define BUFFER_SIZE 8
 
@@ -26,6 +27,21 @@ typedef struct {
 
 KeyBinding bindings[10];
 int binding_count = 0;
+
+char config_file_path[512];  // Stockera le chemin complet du fichier de configuration
+
+void set_config_path() {
+    char exe_path[512];
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (len != -1) {
+        exe_path[len] = '\0';  // Ajoute un caractère de fin de chaîne
+        char *dir = dirname(exe_path);  // Récupère le dossier de l'exécutable
+        snprintf(config_file_path, sizeof(config_file_path), "%s/%s", dir, CONFIG_FILE_NAME);
+    } else {
+        perror("Impossible de récupérer le chemin de l'exécutable");
+        exit(EXIT_FAILURE);
+    }
+}
 
 int is_target_device(const char *hidraw) {
     char uevent_path[512];
@@ -78,7 +94,7 @@ KeySym get_keysym_from_string(const char *key) {
 }
 
 void load_config() {
-    FILE *file = fopen(CONFIG_FILE, "r");
+    FILE *file = fopen(config_file_path, "r");
     if (!file) {
         perror("Impossible d'ouvrir params.cfg");
         return;
@@ -196,6 +212,7 @@ void read_hidraw_data(const char *device_path) {
 }
 
 int main() {
+    set_config_path();
     load_config();
     char *device_path = find_hidraw_device();
     if (!device_path) {
