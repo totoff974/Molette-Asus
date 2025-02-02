@@ -162,8 +162,7 @@ void read_hidraw_data(const char *device_path) {
                 if (memcmp(last_data, (uint8_t[]){0x01, 0x01, 0x00, 0x00}, 4) == 0) {
                     memset(last_data, 0, sizeof(last_data));
                     printf("Relâchement après clic, prendre en compte.\n");
-                    // Traiter comme un relâchement
-                    printf("Relâchement du bouton.\n");
+                    execute_action("ACTION_CLIC_ROUE");
                 }
             }
 
