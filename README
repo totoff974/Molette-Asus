@@ -3,3 +3,10 @@
 #
 
 gcc -o action_roue action_roue.c -lX11 -lXtst
+
+
+#
+# pour execution automatique GNOME
+#
+
+echo -e "[Desktop Entry]\nType=Application\nName=Roue\nComment=Lancement des raccourcis roue\nExec=~/Documents/Prog/Asus_Roue/action_roue\nX-GNOME-AutoRestart=true\nNoDisplay=true" > ~/.config/autostart/roue.desktop && chmod +x ~/.config/autostart/roue.desktop
