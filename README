@@ -2,7 +2,7 @@
 # Pour compiler :
 #
 
-gcc -o action_roue action_roue.c -lX11 -lXtst
+gcc -o action_roue action_roue.c
 
 
 #
