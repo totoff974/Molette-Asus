@@ -10,6 +10,7 @@
 #include <libgen.h>
 #include <ctype.h>
 #include <stdbool.h>  // Inclure pour `bool`
+#include <poll.h> 
 
 #define CONFIG_FILE_NAME "params.cfg"
 #define SYS_HIDRAW_PATH "/sys/class/hidraw"
@@ -199,85 +200,97 @@ void read_hidraw_data(const char *device_path) {
         return;
     }
 
+    struct pollfd fds;
+    fds.fd = fd;
+    fds.events = POLLIN;  // On surveille les données en entrée
+
     uint8_t data[BUFFER_SIZE];
     uint8_t last_data[BUFFER_SIZE] = {0}; // Stocker les données précédentes
 
     while (1) {
-        ssize_t bytesRead = read(fd, data, BUFFER_SIZE);
-        if (bytesRead < 0) {
-            perror("Erreur de lecture du périphérique HID");
-            break;  // Sortie de la boucle en cas d'erreur
+        int ret = poll(&fds, 1, -1);  // Attente infinie d'un événement
+        if (ret < 0) {
+            perror("Erreur poll()");
+            break;
         }
 
-        if (bytesRead >= 4) {  // Vérification pour éviter un dépassement de tampon
-            // Affichage des données brutes en hexadécimal
-            if (Debug) {
-                printf("Données HID : ");
-                for (int i = 0; i < bytesRead; i++) {
-                    printf("%02X ", data[i]);
-                }
-                printf("\n");
+        if (fds.revents & POLLIN) {  // Si on a reçu des données
+            ssize_t bytesRead = read(fd, data, BUFFER_SIZE);
+            if (bytesRead < 0) {
+                perror("Erreur de lecture du périphérique HID");
+                break;  // Sortie de la boucle en cas d'erreur
             }
 
-            // Comparaison des données pour déterminer l'action
-            if (memcmp(&data[1], (uint8_t[]){0x00, 0x01, 0x00}, 3) == 0) {
-                execute_action("ACTION_TOURNER_DROITE");
+            if (bytesRead >= 4) {  // Vérification pour éviter un dépassement de tampon
+                // Affichage des données brutes en hexadécimal
                 if (Debug) {
-                    printf("ACTION_ROUE_DROITE\n");
-                }
-            }
-            else if (memcmp(&data[1], (uint8_t[]){0x00, 0xFF, 0xFF}, 3) == 0) {
-                execute_action("ACTION_TOURNER_GAUCHE");
-                if (Debug) {
-                    printf("ACTION_ROUE_GAUCHE\n");
-                }
-            }
-
-            // Détection des clics
-            else if (memcmp(&data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0) {
-                if (Debug) {
-                    printf("Clic... En attente de l'action suivante...\n");
-                }
-                memcpy(last_data, data, BUFFER_SIZE);  // Stocker l'état du clic
-            }
-            else if (memcmp(&data[1], (uint8_t[]){0x00, 0x00, 0x00}, 3) == 0) {
-                if (memcmp(&last_data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0) {
-                    memset(last_data, 0, BUFFER_SIZE);
-                    if (Debug) {
-                        printf("Relâchement après clic, prise en compte.\n");
+                    printf("Données HID : ");
+                    for (int i = 0; i < bytesRead; i++) {
+                        printf("%02X ", data[i]);
                     }
-                    execute_action("ACTION_CLIC_ROUE");
+                    printf("\n");
                 }
-            }
 
-            // Détection clic + tourne à droite
-            else if (memcmp(&data[1], (uint8_t[]){0x01, 0x01, 0x00}, 3) == 0) {
-                if (memcmp(&last_data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0 ||
-                    memcmp(&last_data[1], (uint8_t[]){0x01, 0x01, 0x00}, 3) == 0 ||
-                    memcmp(&last_data[1], (uint8_t[]){0x01, 0xFF, 0xFF}, 3) == 0) {
-                    memcpy(last_data, data, BUFFER_SIZE);
+                // Comparaison des données pour déterminer l'action
+                if (memcmp(&data[1], (uint8_t[]){0x00, 0x01, 0x00}, 3) == 0) {
+                    execute_action("ACTION_TOURNER_DROITE");
                     if (Debug) {
-                        printf("Clic + tourne à droite.\n");
+                        printf("ACTION_ROUE_DROITE\n");
                     }
-                    execute_action("ACTION_APPUYER_ROUE_DR");
                 }
-            }
+                else if (memcmp(&data[1], (uint8_t[]){0x00, 0xFF, 0xFF}, 3) == 0) {
+                    execute_action("ACTION_TOURNER_GAUCHE");
+                    if (Debug) {
+                        printf("ACTION_ROUE_GAUCHE\n");
+                    }
+                }
 
-            // Détection clic + tourne à gauche
-            else if (memcmp(&data[1], (uint8_t[]){0x01, 0xFF, 0xFF}, 3) == 0) {
-                if (memcmp(&last_data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0 ||
-                    memcmp(&last_data[1], (uint8_t[]){0x01, 0x01, 0x00}, 3) == 0 ||
-                    memcmp(&last_data[1], (uint8_t[]){0x01, 0xFF, 0xFF}, 3) == 0) {
-                    memcpy(last_data, data, BUFFER_SIZE);
+                // Détection des clics
+                else if (memcmp(&data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0) {
                     if (Debug) {
-                        printf("Clic + tourne à gauche.\n");
+                        printf("Clic... En attente de l'action suivante...\n");
                     }
-                    execute_action("ACTION_APPUYER_ROUE_GA");
+                    memcpy(last_data, data, BUFFER_SIZE);  // Stocker l'état du clic
                 }
-            }
-            else {
-                if (Debug) {
-                    printf("Action inconnue, aucune action effectuée.\n");
+                else if (memcmp(&data[1], (uint8_t[]){0x00, 0x00, 0x00}, 3) == 0) {
+                    if (memcmp(&last_data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0) {
+                        memset(last_data, 0, BUFFER_SIZE);
+                        if (Debug) {
+                            printf("Relâchement après clic, prise en compte.\n");
+                        }
+                        execute_action("ACTION_CLIC_ROUE");
+                    }
+                }
+
+                // Détection clic + tourne à droite
+                else if (memcmp(&data[1], (uint8_t[]){0x01, 0x01, 0x00}, 3) == 0) {
+                    if (memcmp(&last_data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0 ||
+                        memcmp(&last_data[1], (uint8_t[]){0x01, 0x01, 0x00}, 3) == 0 ||
+                        memcmp(&last_data[1], (uint8_t[]){0x01, 0xFF, 0xFF}, 3) == 0) {
+                        memcpy(last_data, data, BUFFER_SIZE);
+                        if (Debug) {
+                            printf("Clic + tourne à droite.\n");
+                        }
+                        execute_action("ACTION_APPUYER_ROUE_DR");
+                    }
+                }
+
+                // Détection clic + tourne à gauche
+                else if (memcmp(&data[1], (uint8_t[]){0x01, 0xFF, 0xFF}, 3) == 0) {
+                    if (memcmp(&last_data[1], (uint8_t[]){0x01, 0x00, 0x00}, 3) == 0 ||
+                        memcmp(&last_data[1], (uint8_t[]){0x01, 0x01, 0x00}, 3) == 0 ||
+                        memcmp(&last_data[1], (uint8_t[]){0x01, 0xFF, 0xFF}, 3) == 0) {
+                        memcpy(last_data, data, BUFFER_SIZE);
+                        if (Debug) {
+                            printf("Clic + tourne à gauche.\n");
+                        }
+                        execute_action("ACTION_APPUYER_ROUE_GA");
+                    }
+                }
+                else {
+                    if (Debug) {
+                        printf("Action inconnue, aucune action effectuée.\n");
+                    }
                 }
             }
         }
